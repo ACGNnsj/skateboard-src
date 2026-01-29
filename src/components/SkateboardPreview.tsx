@@ -80,7 +80,11 @@ const getMeshDimensions = (mesh: THREE.Mesh): {
     };
 };
 
-const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => {
+// 调整useSkateboard，接收WebGPU状态回调
+const useSkateboard = (
+    canvasRef: React.RefObject<HTMLCanvasElement | null>,
+    setIsWebGPUEnabled: (enabled: boolean) => void // 新增：传递WebGPU状态给组件
+) => {
     const sceneRef = useRef<THREE.Scene | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const rendererRef = useRef<WebGPURenderer | THREE.WebGLRenderer | null>(null);
@@ -91,9 +95,6 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
     // WASD控制核心：仅存临时向量，避免重复创建
     const keysPressedRef = useRef<Set<string>>(new Set());
     const cameraMoveSpeed = useRef<number>(0.05); // 移动速度，可调整
-    // const viewDir = useRef<THREE.Vector3>(new THREE.Vector3()); // 相机视线方向（W/S用）
-    // const screenLeftRight = useRef<THREE.Vector3>(new THREE.Vector3()); // 屏幕左右方向（A/D用）
-    // const cameraUp = useRef<THREE.Vector3>(new THREE.Vector3(0, 1, 0)); // 固定世界上方向
 
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -143,6 +144,9 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
         // WebGPU/GL渲染器适配
         let renderer: WebGPURenderer | THREE.WebGLRenderer;
         const isWebGPUAvailable = !!navigator.gpu;
+        // 新增：更新WebGPU状态给上层组件
+        setIsWebGPUEnabled(isWebGPUAvailable);
+
         try {
             if (isWebGPUAvailable) {
                 renderer = new WebGPURenderer({
@@ -177,7 +181,7 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
 
         // 加光/地面
         addLighting(scene);
-        addGround(scene);
+        // addGround(scene);
         updateSceneStats(scene);
 
         // 绑定事件
@@ -211,7 +215,50 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
         };
         cleanupRef.current = cleanup;
         return cleanup;
-    }, [canvasRef, handleKeyDown, handleKeyUp]);
+    }, [canvasRef, handleKeyDown, handleKeyUp, setIsWebGPUEnabled]);
+
+    // 新增：模型翻转函数，基于模型自身局部坐标系，避免初始旋转干扰
+    const flipModel = useCallback((axis: 'x' | 'y' | 'z' = 'y') => {
+        if (!modelRef.current) {
+            setError('请先加载滑板模型，再执行翻转操作');
+            return;
+        }
+
+        const rotateAngle = Math.PI; // 180度翻转
+        const model = modelRef.current;
+
+        // 基于模型自身局部坐标系创建旋转轴
+        const localAxis = new THREE.Vector3(0, 0, 0);
+        switch (axis) {
+            case 'x':
+                // 垂直翻转：绕模型自身X轴（板面的前后方向）
+                localAxis.set(1, 0, 0);
+                break;
+            case 'y':
+                // 水平翻转：绕模型自身Y轴（板面的左右方向）
+                localAxis.set(0, 1, 0);
+                break;
+            case 'z':
+                localAxis.set(0, 0, 1);
+                break;
+        }
+
+        // 将局部轴转换为世界空间轴
+        const worldAxis = localAxis.applyQuaternion(model.quaternion).normalize();
+
+        // 创建旋转矩阵，以模型自身中心为旋转点
+        const rotationMatrix = new THREE.Matrix4().makeRotationAxis(worldAxis, rotateAngle);
+        const modelPosition = model.position.clone();
+
+        // 1. 先将模型移到世界原点
+        model.position.set(0, 0, 0);
+        // 2. 应用旋转
+        model.applyMatrix4(rotationMatrix);
+        // 3. 移回原位置
+        model.position.copy(modelPosition);
+
+        setError(null);
+    }, []);
 
     // 加载滑板模型（无改动）
     const loadSkateboardModel = useCallback(async (modelUrl: string | File) => {
@@ -251,7 +298,7 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
             const bottomStickerMesh = findMeshInModel(model, 'bottom_sticker');
 
             if (!baseMesh || !topStickerMesh || !bottomStickerMesh) {
-                throw new Error('模型中未找到base/top_sticker Mesh，请检查模型命名');
+                throw new Error('模型中未找到base/top_sticker/bottom_sticker Mesh，请检查模型命名');
             }
 
             // 计算并设置板面尺寸
@@ -318,18 +365,18 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
         }
     }, []);
 
-    const getUpscaledImage = async (url: string): Promise<string> => {
+    // 新增：接收selectedIndex参数，替换硬编码16
+    const getUpscaledImage = async (url: string, selectedIndex: number): Promise<string> => {
         await init();
         const processor = await new Anime4KProcessor();
-        const selectedIndex = 0;
+        console.log('Original image:', url)
         const result = await processor.process_image_with_pipeline(url, selectedIndex);
         console.log('Upscaled image:', result);
         return result;
     };
 
-
-    // 顶部/底部贴纸加载（无改动）
-    const loadTopTexture = useCallback((file: File) => {
+    // 顶部贴纸加载：接收Anime4K选中索引
+    const loadTopTexture = useCallback((file: File, selectedAnime4KIndex: number = 16) => {
         if (!modelRef.current) {
             setError('请先加载3D模型');
             return;
@@ -375,9 +422,8 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
             } else {
                 const originUrl = event.target.result as string;
                 if (rendererRef.current instanceof WebGPURenderer) {
-                    getUpscaledImage(originUrl).then(
+                    getUpscaledImage(originUrl, selectedAnime4KIndex).then(
                         (url) => {
-                            console.log('upscaled image url:', url);
                             loadTextureFromUrl(url, topStickerMaterial);
                             setIsLoading(false);
                         }
@@ -487,7 +533,6 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
             texture.center.set(0.5, 0.5);
             texture.needsUpdate = true;
 
-
             material.map = texture;
             material.opacity = 1;
             material.needsUpdate = true;
@@ -519,6 +564,7 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
         scene.add(dl);
     };
 
+    // @ts-ignore
     const addGround = (scene: THREE.Scene) => {
         const ground = new THREE.Mesh(
             new THREE.PlaneGeometry(500, 500),
@@ -557,7 +603,7 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
         rendererRef.current.setSize(window.innerWidth, window.innerHeight);
     }, [canvasRef]);
 
-// ========== 核心：相机局部空间纯平动（无旋转，匀速，轨迹确定） ==========
+    // ========== 核心：相机局部空间纯平动（无旋转，匀速，轨迹确定） ==========
     const animate = useCallback(() => {
         animationFrameRef.current = requestAnimationFrame(animate);
         if (!rendererReadyRef.current || !cameraRef.current) return;
@@ -597,11 +643,6 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
             camera.position.addScaledVector(cameraLeft, -speed); // 相机局部右（直线右移，无绕转，和前后垂直）
         }
 
-        // // 高度限制：你的注释保留，按需开启
-        // if (isMoving && camera.position.y < 0.5) {
-        //     camera.position.y = 0.5;
-        // }
-
         // 模型轻微自转
         modelRef.current && (modelRef.current.rotation.y += 0.00001);
 
@@ -616,26 +657,65 @@ const useSkateboard = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => 
     }, []);
 
     return {
-        initScene, cleanupScene, loadSkateboardModel, loadTopTexture, loadBottomTexture, setBoardColor,
+        initScene, cleanupScene, loadSkateboardModel, loadTopTexture, loadBottomTexture,
+        setBoardColor, flipModel, // 暴露翻转函数
         isLoading, error, performanceStats, isBGRAFormat, setIsBGRAFormat, modelLoading, boardDimensions
     };
 };
 
-// 主组件：更新操作提示
+// 主组件：包含Anime4K下拉框 + 模型翻转按钮
 const SkateboardPreview: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const defaultModelLoadedRef = useRef(false); // 标记是否已加载过默认模型
+    // ===== Anime4K 配置 =====
+    const resultNames = [
+        "CNNx2UL",
+        "GANx4UUL",
+        "GANx3L",
+        "DenoiseCNNx2VL",
+        "CNNUL",
+        "CNNVL",
+        "CNNM",
+        "CNNSoftVL",
+        "CNNSoftM",
+        "CNNx2M",
+        "CNNx2VL",
+        "Mode A",
+        "Mode AA",
+        "Mode B",
+        "Mode BB",
+        "Mode C",
+        "Mode CA",
+        "DoG (Deblur)",
+        "Bilateral Mean (Denoise)",
+        "GANUUL"
+    ];
+    const [selectedAnime4KIndex, setSelectedAnime4KIndex] = useState(16); // 默认选中Mode CA
+    const [isWebGPUEnabled, setIsWebGPUEnabled] = useState(false); // WebGPU状态标记
+
     const {
-        initScene, cleanupScene, loadSkateboardModel, loadTopTexture, loadBottomTexture, setBoardColor,
+        initScene, cleanupScene, loadSkateboardModel, loadTopTexture, loadBottomTexture,
+        setBoardColor, flipModel, // 解构翻转函数
         isLoading, error, performanceStats, isBGRAFormat, setIsBGRAFormat, modelLoading, boardDimensions
-    } = useSkateboard(canvasRef);
+    } = useSkateboard(canvasRef, setIsWebGPUEnabled);
 
     const [boardColor, setBoardColorState] = useState('#8B4513');
     const [showPerfPanel, setShowPerfPanel] = useState(true);
 
     useEffect(() => {
-        initScene().catch(err => console.error('场景初始化失败:', err));
-        return () => cleanupScene();
-    }, [initScene, cleanupScene]);
+        initScene().then(() => {
+            // 只有未加载过默认模型时，才执行加载
+            if (!defaultModelLoadedRef.current) {
+                defaultModelLoadedRef.current = true; // 标记为已开始加载
+                loadSkateboardModel('./assets/default.glb');
+            }
+        }).catch(err => console.error('场景初始化失败:', err));
+        return () => {
+            cleanupScene();
+            // 清理时重置加载锁（可选，方便页面刷新后重新加载）
+            defaultModelLoadedRef.current = false;
+        };
+    }, [initScene, cleanupScene, loadSkateboardModel]);
 
     // 模型/贴纸拖拽上传
     const onModelDrop = useCallback((acceptedFiles: File[]) => {
@@ -647,8 +727,11 @@ const SkateboardPreview: React.FC = () => {
     }, [loadSkateboardModel]);
 
     const onTopTextureDrop = useCallback((acceptedFiles: File[]) => {
-        if (acceptedFiles.length > 0) loadTopTexture(acceptedFiles[0]);
-    }, [loadTopTexture]);
+        if (acceptedFiles.length > 0) {
+            // 传递选中的Anime4K索引给顶部贴纸加载
+            loadTopTexture(acceptedFiles[0], selectedAnime4KIndex);
+        }
+    }, [loadTopTexture, selectedAnime4KIndex]);
 
     const onBottomTextureDrop = useCallback((acceptedFiles: File[]) => {
         if (acceptedFiles.length > 0) loadBottomTexture(acceptedFiles[0]);
@@ -740,6 +823,16 @@ const SkateboardPreview: React.FC = () => {
                     <span className="color-code">{boardColor}</span>
                 </div>
 
+                {/* 新增：模型翻转按钮组 */}
+                <div className="flip-btn-group">
+                    <button className="flip-btn" onClick={() => flipModel('y')}>
+                        旋转滑板
+                    </button>
+                    <button className="flip-btn" onClick={() => flipModel('z')}>
+                        翻转滑板
+                    </button>
+                </div>
+
                 {/* BGRA开关 */}
                 <div className="bgra-switch-container">
                     <label style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
@@ -748,6 +841,27 @@ const SkateboardPreview: React.FC = () => {
                         上传BGRA格式图片
                     </label>
                 </div>
+
+                {/* Anime4K 超分管线下拉框（仅WebGPU显示） */}
+                {isWebGPUEnabled && (
+                    <div className="anime4k-select-container">
+                        <label className="anime4k-label">Anime4K 超分管线（仅WebGPU生效）</label>
+                        <select
+                            value={selectedAnime4KIndex}
+                            onChange={(e) => setSelectedAnime4KIndex(Number(e.target.value))}
+                            className="anime4k-select"
+                        >
+                            {resultNames.map((name, index) => (
+                                <option
+                                    key={index}
+                                    value={index}
+                                >
+                                    {index}: {name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                )}
 
                 {/* 贴纸上传 */}
                 <div className={`texture-dropzone ${isTopDragActive ? 'active' : ''}`} {...getTopTextureRootProps()}>
@@ -781,6 +895,7 @@ const SkateboardPreview: React.FC = () => {
                         <li>先上传GLB/GLTF模型，需包含base/top_sticker/bottom_sticker Mesh</li>
                         <li>滚轮缩放 | 右键平移 | WASD按上述规则移动</li>
                         <li>BGRA开关：上传BMP/RAW格式图片时开启</li>
+                        <li>可点击按钮，水平/垂直翻转滑板模型查看贴纸效果</li>
                     </ul>
                 </div>
             </div>
@@ -813,6 +928,35 @@ const SkateboardPreview: React.FC = () => {
                 .dimensions-panel h4 { margin: 0 0 8px 0; font-size: 14px; }
                 .dimension-item { display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px; }
                 .dimension-item span { color: #4CAF50; font-family: monospace; }
+                /* Anime4K 下拉框样式 */
+                .anime4k-select-container { margin: 15px 0; }
+                .anime4k-label { display: block; margin-bottom: 8px; font-size: 14px; color: #ccc; }
+                .anime4k-select { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #4CAF50; background: rgba(0,0,0,0.6); color: #fff; font-size: 14px; cursor: pointer; }
+                .anime4k-select option { background: #222; color: #fff; }
+                .anime4k-select:focus { outline: none; border-color: #66bb6a; box-shadow: 0 0 0 2px rgba(76,175,80,0.2); }
+                /* 新增：翻转按钮样式 */
+                .flip-btn-group {
+                    display: flex;
+                    gap: 8px;
+                    margin: 15px 0;
+                }
+                .flip-btn {
+                    flex: 1;
+                    padding: 8px 12px;
+                    border-radius: 6px;
+                    border: none;
+                    background: #4CAF50;
+                    color: #fff;
+                    font-size: 14px;
+                    cursor: pointer;
+                    transition: all 0.3s;
+                }
+                .flip-btn:hover {
+                    background: #45a049;
+                }
+                .flip-btn:active {
+                    transform: scale(0.98);
+                }
             `}</style>
         </div>
     );
