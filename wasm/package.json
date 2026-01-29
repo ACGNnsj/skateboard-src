@@ -1,0 +1,15 @@
+{
+  "name": "anime4k-wgpu-rs",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "anime4k_wgpu_rs_bg.wasm",
+    "anime4k_wgpu_rs.js",
+    "anime4k_wgpu_rs.d.ts"
+  ],
+  "main": "anime4k_wgpu_rs.js",
+  "types": "anime4k_wgpu_rs.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

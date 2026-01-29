@@ -1,0 +1,41 @@
+{
+  "name": "skateboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "anime4k-wgpu-rs": "0.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-dropzone": "^14.3.8",
+    "three": "<0.182.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^24.10.9",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.182.0",
+    "@vitejs/plugin-react": "^5.1.2",
+    "eslint": "^9.39.2",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "globals": "^17.2.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "vite": "npm:rolldown-vite@7.3.1"
+  },
+  "overrides": {
+    "vite": "npm:rolldown-vite@7.3.1"
+  },
+  "packageManager": "yarn@4.12.0",
+  "resolutions": {
+    "anime4k-wgpu-rs": "portal:/F:/webstorm/skateboard/wasm"
+  }
+}
